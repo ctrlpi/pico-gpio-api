@@ -16,7 +16,7 @@ BASE_URL="https://raw.githubusercontent.com/ctrlpi/pico-gpio-api/main"
 
 
 
-FILES="main.py pico.sh install.sh LICENSE README.md"
+FILES="main.py install.sh LICENSE README.md"
 DIR="pico-gpio-api"
 SHELLS=(bash sh dash zsh ksh ash)
 
@@ -51,7 +51,7 @@ if [ "$DOWNLOAD" = true ]; then
     curl -fsSL "$BASE_URL/$f" -o "$DIR/$f.tmp"
     mv "$DIR/$f.tmp" "$DIR/$f"   # only replace the old copy once the download completed
   done
-  chmod +x "$DIR/install.sh" "$DIR/pico.sh"
+  chmod +x "$DIR/install.sh"
 fi
 
 # --- venv + mpremote ---
@@ -89,7 +89,7 @@ ask_required() {
   if ! { : < /dev/tty; } 2>/dev/null; then
     echo "ERROR: no terminal available to ask for $label, and the device has no wifi.txt." >&2
     echo "Create $DIR/wifi.txt by hand (see wifi.txt.example), push it with" >&2
-    echo "./pico.sh put wifi.txt, then re-run." >&2
+    echo "pico-bay or mpremote, then re-run." >&2
     exit 1
   fi
   while [ -z "$ans" ]; do
@@ -179,6 +179,7 @@ done
 
 [ "$FAILED" = 0 ] && echo "Done." || exit 1
 
-# Clean up local staging credentials.
+# Clean up local staging credentials, and the seeded script if we wrote one.
 rm -f "$CONFIG_FILE" "$WIFI_FILE"
+[ "$NEED_SCRIPT" = false ] || { rm -f "$SCRIPT_FILE"; rmdir "$DIR/scripts" 2>/dev/null || true; }
 echo ""

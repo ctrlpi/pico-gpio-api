@@ -1,19 +1,19 @@
 # Raspberry Pi Pico GPIO API
 
 [![Platform: Raspberry Pi Pico W](https://img.shields.io/badge/platform-Raspberry%20Pi%20Pico-006400.svg)](#install-on-your-pico-w)
-[![Version 0.9.23](https://img.shields.io/badge/version-0.9.23-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
-[![MicroPython](https://img.shields.io/badge/runtime-MicroPython-blue.svg)](#install-on-your-pico-w)
+[![Version 0.9.26](https://img.shields.io/badge/version-0.9.26-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
+[![MicroPython 1.29](https://img.shields.io/badge/runtime-MicroPython%201.29-blue.svg)](#install-on-your-pico-w)
 [![Auth: Api-Key](https://img.shields.io/badge/auth-Api--Key-orange.svg)](#authentication)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-188038.svg)](LICENSE)
 ![Status: Beta](https://img.shields.io/badge/status-Beta-red.svg)
 
 A MicroPython server that exposes Raspberry Pi Pico W GPIO control through a REST API, allowing HTTP clients to trigger outputs and read inputs remotely.
 
 Runs on a Raspberry Pi Pico W / 2 W, secured with API key authentication, GPIO via `machine.Pin`.
 
-It is the Pico port of [pi-gpio-api](https://github.com/ctrlpi/pi-gpio-api): same endpoints, same wire format, same API-key authentication, so clients, testers, and integrations target a Pi or a Pico interchangeably, and the two projects release and version in lockstep.
+It is the Pico port of [pi-gpio-api](https://github.com/ctrlpi/pi-gpio-api): same endpoints, same wire format, same API-key authentication, so clients, testers, and integrations target a Pi, a Pico, or an ESP32 interchangeably, and all three ports (Pi, Pico, ESP32) release and version in lockstep.
 
-> Looking for AI-agent / MCP control, Apple HomeKit or Google Home? See the [Related projects](#related-projects) below that drive one or more of these API servers (Pi or Pico) over their REST endpoints.
+> Looking for AI-agent / MCP control, Apple HomeKit or Google Home? See the [Related projects](#related-projects) below that drive one or more of these API servers (Pi, Pico, or ESP32) over their REST endpoints.
 
 ## Install on your Pico W
 
@@ -71,23 +71,6 @@ Nothing to set up: the firmware auto-runs `main.py` at power-on, so once the fil
 
 The server binds **`0.0.0.0`** (all interfaces) and port **8314**, so it is reachable on your local network; keep it behind a trusted LAN (see the No-TLS note under Authentication).
 
-## Managing files on the Pico (`pico.sh`)
-
-A small utility to help inspect and manage files on a connected Pico over USB (via `mpremote`, same venv `install.sh` sets up). It's not part of the deploy flow (use `install.sh` for that); this is for poking around a device you already set up: checking what's on it, pulling a file off for a look, or wiping it for a clean start.
-
-```bash
-./pico.sh                 # show the command list
-./pico.sh list            # list files on the Pico (size, date, name)
-./pico.sh model           # print the Pico model and MicroPython version
-./pico.sh <file>          # print a file's contents, e.g. ./pico.sh config.json
-./pico.sh get <file>      # copy <file> from the Pico into the current directory
-./pico.sh put <file>      # copy a local <file> onto the Pico
-./pico.sh rm <file>       # delete <file> on the Pico
-./pico.sh clean           # delete ALL files on the Pico (asks to confirm)
-```
-
-It interrupts the running `main.py` to talk to the board over USB, so it resets the Pico on exit to resume the agent.
-
 ## Try the API
 
 Replace `<pico-host-addr>` with the device address and `your-secret-key` with your API key.
@@ -120,7 +103,7 @@ curl -X POST http://<pico-host-addr>:8314/gpio/config/26 \
   -d '{"name": "relay", "type": "output", "reversed": true, "max": 3600}'
 ```
 
-#### 5. Scan all usable hardware pins (GP0–GP28, minus the WiFi-reserved ones)
+#### 5. Scan all usable hardware pins (GP0-GP28, minus the WiFi-reserved ones)
 
 ```bash
 curl http://<pico-host-addr>:8314/gpio/scan -H "Api-Key: your-secret-key"
@@ -190,7 +173,7 @@ The core of the API: read, write, configure, and watch GPIO pins. Every pin is a
 | `POST` | `/gpio/write/{name_or_gpio}` | Write a value to a pin |
 | `POST` | `/gpio/config/{name_or_gpio}` | Configure a pin (name, type, init, pullup, max, reversed, watched) |
 | `GET` | `/gpio/watched` | List all currently watched pins, the active webhook URL, and the `bridges` callback URLs (URLs only, never the keys) |
-| `GET` | `/gpio/scan` | Scan all usable pins: GP0–GP28 minus GP23/24/25/29, which are wired to the CYW43 WiFi chip (touching them drops the wireless link; they're also rejected with a `400` on read/write/config and stripped from loaded configs). Returns `level` (the physical state) and `value` (logical). Also returns the live `agent` block; the pin map is keyed `gpios`. |
+| `GET` | `/gpio/scan` | Scan all usable pins: GP0-GP28 minus GP23/24/25/29, which are wired to the CYW43 WiFi chip (touching them drops the wireless link; they're also rejected with a `400` on read/write/config and stripped from loaded configs). Returns `level` (the physical state) and `value` (logical). Also returns the live `agent` block; the pin map is keyed `gpios`. |
 
 ### Request Bodies
 
@@ -266,7 +249,7 @@ Sensors are pure config plus on-demand reads: no pins, no background polling, no
 
 ### Configure
 
-Scripts live in the **`scripts/` folder** on the Pico's filesystem. `install.sh` creates it and seeds it with a short `cpu-temp.py` example; upload your own with `./pico.sh put scripts/weather.py` (the agent itself never creates the folder - with no folder, every sensor just reads `script not found`).
+Scripts live in the **`scripts/` folder** on the Pico's filesystem. `install.sh` creates it and seeds it with a short `cpu-temp.py` example; upload your own with `mpremote fs cp weather.py :scripts/weather.py` or with Pico Bay (the agent itself never creates the folder - with no folder, every sensor just reads `script not found`).
 
 A Pico has **no shell**, so unlike the Pi a `script` sensor is a MicroPython `.py` file the agent execs in-process. Scripts can have arguments as `"<file.py> [args...]"`, where the file is a **bare filename** in `scripts/`: no paths, no `..`, no leading dot, no subfolders. The file should either define a `read()` function (called as `read(*args)`) or set a module-level `result` (with the arg list also available as `args` in the namespace), so one script can be reused with different params. Arguments may contain letters and digits only. The returned value can be any JSON-serializable object: a dict, number, or string.
 
@@ -309,7 +292,7 @@ Read and change the agent's own configuration, and drive process and device life
 | `POST` | `/restart` | Restart the device. Body is optional; pass `{"reboot": true}` to request a full hardware reset instead (see below) |
 | `GET` | `/logs` | Last 30 log lines as a JSON array (in-memory ring buffer, cleared on reboot) |
 
-**Restart/reboot (`/restart`)**: a microcontroller has no OS layer: only `machine.reset()` exists (a full hardware reset), so restart and reboot are the same operation. Both reply `{"status": "restarting"}` or `{"status": "rebooting"}` (matching the request) and then call `machine.reset()`.
+**Restart/reboot (`/restart`)**: a plain `/restart` reloads the agent in place (config, pins and watches are set up again, and WiFi stays connected). `{"reboot": true}` does a full hardware reset with `machine.reset()`. Both reply first, with `{"status": "restarting"}` or `{"status": "rebooting"}`.
 
 **Self-upgrade (`/upgrade`)**: downloads the canonical `main.py` (from `raw.githubusercontent.com/ctrlpi/pico-gpio-api/main/main.py`) over TLS straight to flash. The download is verified before anything is swapped: a completed transfer (a short or truncated body is an error, never a partial file), non-trivial size, the expected banner and imports at the head, no NUL bytes anywhere, a byte count matching what was written, and the trailing `main()` call that any truncation would lose. Only then is the current `main.py` renamed to `main.py.backup` and the new file put in its place, and the same check is run again on the installed file: if it fails there, `main.py.backup` is restored and the board is left running the code it already had. If the download or either check fails, nothing is swapped and the board keeps running the current code. Config, `wifi.txt`, and status files are left untouched.
 
@@ -362,6 +345,9 @@ The grouped spelling works too (`{"settings": {"log_days": 5}}`), and either way
 its own URL never clears the other bridge's. `/config/load` accepts both forms as well, and
 always writes `config.json` in the grouped shape.
 
+Keys, names, URLs and scripts are always text: a number sent for one is stored as text
+(`4242` becomes `"4242"`), on `/config/update`, `/config/load`, `/gpio/config` and `/sensor/config`.
+
 `webhook_key` is a dedicated key for the webhook *target* (see Webhooks below); it is not the agent's own `api_key`. An empty string clears it, same as `webhook_url`.
 
 The live `agent` block is read-only: if it is present in an update or a whole-config load it is dropped rather than stored, so a read-modify-load round trip can post `/config/read` straight back.
@@ -403,7 +389,7 @@ The **Pico 2 W (RP2350)** has the memory headroom and is unaffected: `https://` 
 
 This applies to `webhook_url` only. The `bridges.homekit` / `bridges.matter` / `bridges.homebridge` callbacks are LAN targets that are already plain http, and plain http is unaffected on both boards.
 
-For the same reason, a remote `POST /upgrade` on a Pico W may fail at the TLS handshake, since it downloads `main.py` over https. Retry, or install over USB with `install.sh` (or push the file with `pico.sh`).
+For the same reason, a remote `POST /upgrade` on a Pico W may fail at the TLS handshake, since it downloads `main.py` over https. Retry, or install over USB with `install.sh` (or copy the file with `mpremote`).
 
 ### Delivery and retries
 
@@ -418,11 +404,10 @@ attempt is logged, with the reason and whether another is coming.
 Three extra callback URLs, one owned by each smart-home bridge, sit alongside `webhook_url`:
 `homekit` for the standalone `homekit-bridge`, `matter` for `matter-bridge`, and `homebridge`
 for the `homebridge-ctrlpi` plugin. They are **additive**: a watched event is POSTed to every
-configured target, with the same payload, so a bridge no longer has to take over `webhook_url`.
+configured target, with the same payload, so the bridges and `webhook_url` never compete.
 
-`homebridge` exists so the Homebridge plugin and the standalone `homekit-bridge` can drive the
-same agent at once. Both put pins in the Home app, and while they shared the `homekit` slot,
-whichever configured itself last silently stopped the other receiving events.
+`homebridge` has its own slot, so the Homebridge plugin and the standalone `homekit-bridge`
+can drive the same agent at once.
 
 ```bash
 curl -X POST http://<pico-host-addr>:8314/config/update \
@@ -494,7 +479,7 @@ The state the agent persists to disk, all on the Pico's filesystem alongside `ma
 
 | Feature | Pi (`pi-gpio-api`) | Pico (`pico-gpio-api`) |
 |---------|-----|------|
-| GPIO range | BCM 2–27 | GP0–GP28 except GP23/24/25/29 (reserved for the CYW43 WiFi chip) |
+| GPIO range | BCM 2-27 | GP0-GP28 except GP23/24/25/29 (reserved for the CYW43 WiFi chip) |
 | GPIO | `gpiozero` | `machine.Pin` |
 | Sensor scripts | `.sh`, run as `sh scripts/<file>` | `.py`, exec'd in-process |
 | Interactive API docs (`/docs`, `/redoc`) | Yes (`settings.docs_enabled`) | No |
@@ -518,14 +503,28 @@ driving that line HIGH at the moment the pin is configured, the discharge causes
 microsecond-scale, pad-current-limited contention pulse (this is the standard accepted
 E9 workaround). Original Pico W (RP2040) boards are unaffected and skip the discharge.
 
+## Tests
+
+Run the dependency-free test suite with:
+
+```bash
+python test.py
+```
+
+The test suite runs the MicroPython server locally using a lightweight mock hardware shim and tests against its REST API: authentication, configuration read/update/load, GPIO output configuration, reading/writing/toggling pin values, duration pulses, watched pins, GPIO scan, sensor script execution and security validation (path traversal and argument injection blocking), log retrieval, and request body size limits.
+
 ## Related projects
 
 - **[`pi-gpio-api`](https://github.com/ctrlpi/pi-gpio-api)**: Raspberry Pi GPIO REST server that reads inputs and drives outputs (and named sensors) over an HTTP API.
+- **[`esp32-gpio-api`](https://github.com/ctrlpi/esp32-gpio-api)**: ESP32 port of the GPIO REST server for MicroPython, with the same endpoints, wire format, and auth.
 - **[`mcp-bridge`](https://github.com/ctrlpi/mcp-bridge)**: MCP server that exposes GPIO control as tools for AI agents (e.g. Claude), executing them over the agents' REST API.
-- **`homekit-bridge`** *(coming soon)*: native Apple HomeKit bridge that exposes GPIO pins and sensors as HomeKit accessories, driven over the agents' REST API.
+- **[`homebridge-ctrlpi`](https://github.com/ctrlpi/homebridge-ctrlpi)**: A Homebridge plugin that brings Raspberry Pi, Pico W, and ESP32 GPIO into Apple Home, by driving one or more GPIO agents over their REST API.
+- **`homekit-bridge`** *(coming soon)*: Native Apple HomeKit bridge that exposes GPIO pins and sensors as HomeKit accessories, driven over the agents' REST API.
 - **`matter-bridge`** *(coming soon)*: Matter bridge that exposes GPIO pins and sensors to any Matter platform (Apple Home, Google Home, Alexa, Home Assistant), driven over the agents' REST API.
-- **`gpio-lab`** *(coming soon)*: Web dashboard for monitoring and controlling agents over REST API and MCP.
-- **[`pico-bay`](https://github.com/ctrlpi/pico-bay)**: An App and MCP Server for managing Raspberry Pi Pico and ESP32 boards with MicroPython and CircuitPython over USB.
+- **[`ctrlpi-cli`](https://github.com/ctrlpi/ctrlpi-cli)**: Command-line interface for interacting with ctrlPi agents, with shared agent configuration.
+- **[`ctrlpi-lab`](https://github.com/ctrlpi/ctrlpi-lab)**: A local browser dashboard for your ctrlPi setup. Test GPIO and sensor endpoints, watch webhook events, and tail agent logs.
+- **[`pico-bay`](https://github.com/ctrlpi/pico-bay)**: Web app and MCP server for managing MicroPython and CircuitPython boards, such as the Raspberry Pi Pico and ESP32, over USB.
+- **`pi-bay`** *(coming soon)*: A local web app and MCP server for Raspberry Pi boards over the network. Edit files, open a remote terminal, and manage your Pi remotely.
 
 ## License
 

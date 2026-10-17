@@ -1,4 +1,6 @@
 # main.py - MicroPython single-file GPIO REST API for Raspberry Pi Pico W
+# Comments are kept few and short: this file runs on the Pico as source, so every
+# byte costs flash, and the RAM the Pico W needs to compile it.
 
 import gc
 import machine
@@ -25,11 +27,12 @@ except ImportError:
 FALLBACK_SSID     = "MyNetwork"
 FALLBACK_PASSWORD = "MyPassword"
 DEFAULT_API_KEY   = "your-secret-key"
-VERSION           = "0.9.23"  # agent software version
+VERSION           = "0.9.26"  # agent software version
 DEFAULT_LOG_DAYS  = 7
 PORT              = 8314
 WIFI_DEAD_SECS    = 40    # dead-man switch: hard-reset if WiFi stays lost this long
-WIFI_PROBE_SECS   = 300   # zombie-link check: probe gateway after this long with no traffic
+WIFI_PROBE_SECS   = 120   # idle this long: probe the gateway, then this often
+WIFI_RECONNECT_SECS = 20  # a soft reconnect gets this long before the board resets
 WEBHOOK_MIN_MS    = 200   # per-pin watch debounce gap
 WEBHOOK_IDLE_MS   = 90000 # close cached webhook socket after idle timeout
 WEBHOOK_RETRIES   = 2     # extra delivery attempts
@@ -98,6 +101,24 @@ def _normalize_config(data):
 		target = out.setdefault(group, {})
 		if isinstance(target, dict) and field not in target:
 			target[field] = data[alias]
+	return _text_fields(out)
+
+# A number sent for a key, name, URL or script is stored as text.
+def _as_text(v):
+	return str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+def _text_fields(out):
+	for k in ("name", "api_key"):
+		if k in out:
+			out[k] = _as_text(out[k])
+	for group in ("notifications", "bridges"):
+		if isinstance(out.get(group), dict):
+			out[group] = {f: _as_text(v) for f, v in out[group].items()}
+	for section, field in (("gpios", "name"), ("sensors", "script")):
+		entries = out.get(section)
+		for entry in (entries.values() if isinstance(entries, dict) else ()):
+			if isinstance(entry, dict) and field in entry:
+				entry[field] = _as_text(entry[field])
 	return out
 
 INIT_VALUES = (0, 1, "last")
@@ -125,6 +146,7 @@ def _check_init(v):
 		raise ValueError('init must be 0, 1 or "last" (or "on"/"off"/"restore"/"none"), got ' + repr(v))
 	return v
 
+# Sensor scripts: a bare filename in scripts/, letters/digits args only.
 def _is_alnum(s):
 	return bool(s) and all(("0" <= c <= "9") or ("a" <= c <= "z") or ("A" <= c <= "Z") for c in s)
 
@@ -376,6 +398,7 @@ class GPIOManager:
 					conf.pop("init", None)
 		self.pin_configs = self.config["gpios"]
 
+	# Deferred: maybe_flush() writes it, sparing the flash.
 	def _save_config(self):
 		self._config_dirty = True
 
@@ -409,10 +432,12 @@ class GPIOManager:
 		except Exception:
 			self._status_dirty = True
 
+	# Call before any reset.
 	def _flush_all(self):
 		self._flush_config()
 		self._flush_status()
 
+	# At most one flash write every 2 s; the blink is the idle heartbeat.
 	def maybe_flush(self):
 		if utime.time() - self._last_flush < 2:
 			return
@@ -505,6 +530,7 @@ class GPIOManager:
 			else:
 				self.watches[gpio_str] = True
 
+	# The IRQ only schedules: no allocation in interrupt context.
 	def _setup_irq(self, gpio_str, pin):
 		def handler(p, _g=gpio_str):
 			try:
@@ -517,6 +543,7 @@ class GPIOManager:
 		except Exception:
 			pass
 
+	# Debounce: one webhook per pin per WEBHOOK_MIN_MS.
 	def _on_watch_trigger(self, gpio_str):
 		now  = utime.ticks_ms()
 		last = self._last_watch_ms.get(gpio_str)
@@ -650,6 +677,7 @@ class GPIOManager:
 	def _cancel_revert(self, gpio):
 		self._pending_reverts = [r for r in self._pending_reverts if r[1] != gpio]
 
+	# Pulse reverts run from the main loop, so nothing sleeps.
 	def process_reverts(self):
 		if not self._pending_reverts:
 			return
@@ -672,6 +700,8 @@ class GPIOManager:
 		self._pending_reverts = keep
 
 	def config_pin(self, name_or_gpio, update):
+		if "name" in update:
+			update["name"] = _as_text(update["name"])
 		gpio_str = self.resolve_gpio(name_or_gpio)
 		if gpio_str is None:
 			raise PinNotFound(f"Pin not found: {name_or_gpio}")
@@ -729,6 +759,7 @@ class GPIOManager:
 		self.log(f"[GPIO] GP{gpio_str} configured: {update}")
 		return self.get_pin_info(gpio_str)
 
+	# Unconfigured pins are read with pull-up, then released.
 	def scan_all(self):
 		result = []
 		for gpio in PICO_GPIO_PINS:
@@ -838,6 +869,7 @@ class GPIOManager:
 		except Exception:
 			return ""
 
+	# GET /config/read. Never includes api_key.
 	def get_config(self):
 		notif    = self.config.get("notifications", {})
 		bridges  = self.config.get("bridges", {})
@@ -872,7 +904,7 @@ class GPIOManager:
 			self._save_config()
 			self.log(f"[Sensor] {name} removed")
 			return {"status": "removed" if existed else "not found"}
-		script = update.get("script")
+		script = _as_text(update.get("script"))
 		if not script:
 			raise ValueError("Configure 'script', or 'remove': true to delete the sensor")
 		err = _sensor_script_parts(script)[0]
@@ -883,6 +915,7 @@ class GPIOManager:
 		self.log(f"[Sensor] {name} configured: {script}")
 		return {"name": name, "script": script}
 
+	# Runs the script in-process: its read(*args), or its `result`.
 	def _read_sensor_value(self, name, conf):
 		err, script_file, args = _sensor_script_parts(conf.get("script"))
 		if err:
@@ -1034,6 +1067,7 @@ class GPIOManager:
 		for url, api_key in self._notify_targets():
 			self._webhook_queue.append((None, 0, url, api_key, utime.ticks_ms()))
 
+	# One due webhook per loop; a failure retries WEBHOOK_RETRY_MS later.
 	def process_webhooks(self):
 		if not self._webhook_queue:
 			return
@@ -1079,6 +1113,7 @@ def _read_wifi(path="wifi.txt"):
 		pass
 	return settings
 
+# Resets the board if Wi-Fi isn't up within 30 s.
 def connect_wifi():
 	settings = _read_wifi()
 	ssid     = settings.get("SSID")     or FALLBACK_SSID
@@ -1136,8 +1171,81 @@ def _gateway_alive(wlan):
 	except Exception:
 		return True
 
+def _wifi_reconnect(wlan):
+	# Non-blocking: connect() returns at once, WifiWatchdog checks the outcome.
+	settings = _read_wifi()
+	try:
+		wlan.disconnect()
+	except OSError:
+		pass
+	try:
+		wlan.connect(settings.get("SSID") or FALLBACK_SSID, settings.get("PASSWORD") or FALLBACK_PASSWORD)
+	except OSError:
+		pass
+
+class WifiWatchdog:
+	"""Recovers a link that reports connected but passes nothing. Only while idle:
+	probe the gateway every WIFI_PROBE_SECS, reconnect softly after two failed probes
+	(GPIO untouched), and reset only if the link is still dead WIFI_RECONNECT_SECS
+	later. A link that reports disconnected is the dead-man switch's job, not this one's."""
+
+	def __init__(self, wlan, manager, probe=_gateway_alive, reconnect=_wifi_reconnect,
+	             reset=None, now=utime.time):
+		self._wlan, self._manager, self._now = wlan, manager, now
+		self._probe, self._reconnect = probe, reconnect
+		self._reset = reset or self._hard_reset
+		self._last_ok = self._last_probe = now()
+		self._failures = 0
+		self._reconnect_at = None
+
+	def _log(self, msg):
+		self._manager.log("[WIFI] " + msg)
+		print("[WIFI] " + msg)
+
+	def _hard_reset(self):
+		self._manager._flush_all()
+		machine.reset()
+
+	def traffic(self):
+		# A request got through, so the link works.
+		if self._reconnect_at is not None:
+			self._log("link recovered")
+		self._last_ok = self._now()
+		self._failures = 0
+		self._reconnect_at = None
+
+	def tick(self, busy=False):
+		now = self._now()
+		if self._reconnect_at is not None:
+			if not busy and now - self._last_probe >= 5 and self._wlan.isconnected():
+				self._last_probe = now
+				if self._probe(self._wlan):
+					self.traffic()
+					return
+			if now - self._reconnect_at >= WIFI_RECONNECT_SECS:
+				self._log("still unreachable after reconnect, resetting")
+				self._reset()
+			return
+		# busy: a pulse revert is pending, and a probe can block for up to 2 s.
+		if busy or not self._wlan.isconnected():
+			return
+		if now - self._last_ok < WIFI_PROBE_SECS or now - self._last_probe < WIFI_PROBE_SECS:
+			return
+		self._last_probe = now
+		if self._probe(self._wlan):
+			self._last_ok = now
+			self._failures = 0
+			return
+		self._failures += 1
+		self._log("gateway unreachable (%d)" % self._failures)
+		if self._failures >= 2:
+			self._log("reconnecting")
+			self._reconnect_at = now
+			self._reconnect(self._wlan)
+
 ### HTTP helpers
 
+# Reads and drops a refused request so the client gets the reply.
 def _drain(conn, data, budget=64 * 1024, quiet_ms=1000, max_ms=3000):
 	remaining = -1
 	sep = data.find(b"\r\n\r\n")
@@ -1170,7 +1278,12 @@ def _drain(conn, data, budget=64 * 1024, quiet_ms=1000, max_ms=3000):
 		except Exception: pass
 
 def _recv_request(conn):
+	# Returns (head, body) - head is the request line and headers up to and including
+	# the blank line, body the bytes after it - or None when the request is refused or
+	# never completes.
 	data = b""
+	body = None  # sized from Content-Length once the headers are in
+	got = 0
 	conn.settimeout(2)
 	deadline = utime.ticks_add(utime.ticks_ms(), 6000)
 	while utime.ticks_diff(deadline, utime.ticks_ms()) > 0:
@@ -1184,33 +1297,46 @@ def _recv_request(conn):
 			break
 		if not chunk:
 			break
-		data += chunk
-		if len(data) > MAX_REQUEST_BYTES:
-			_drain(conn, data)
-			return b""
-		sep = data.find(b"\r\n\r\n")
-		if sep != -1:
+		if body is None:
+			data += chunk
+			if len(data) > MAX_REQUEST_BYTES:
+				_drain(conn, data)
+				return None
+			sep = data.find(b"\r\n\r\n")
+			if sep == -1:
+				continue
 			cl = 0
+			chunked = False
 			for line in data[:sep].decode("utf-8", "replace").split("\r\n")[1:]:
-				if line.lower().startswith("content-length:"):
+				low = line.lower()
+				if low.startswith("content-length:"):
 					try: cl = int(line.split(":", 1)[1].strip())
 					except Exception: pass
-					break
-			if cl > MAX_REQUEST_BYTES:
+				elif low.startswith("transfer-encoding:") and "chunked" in low:
+					chunked = True
+			# Refuse a chunked body (400): without a Content-Length it would read as {}.
+			if chunked or cl > MAX_REQUEST_BYTES:
 				_drain(conn, data)
-				return b""
-			if len(data) - sep - 4 >= cl:
-				return data
-	return b""
+				return None
+			if cl == 0:
+				return data[:sep + 4], data[sep + 4:]
+			# One allocation of the exact size, so a fragmented heap can still provide it.
+			body = bytearray(cl)
+			chunk = data[sep + 4:]
+			data = data[:sep + 4]
+		take = min(len(chunk), len(body) - got)
+		body[got:got + take] = chunk[:take]
+		got += take
+		if got >= len(body):
+			return data, body
+	return None
 
-def _parse_request(raw):
-	if not raw:
+def _parse_request(req):
+	if not req:
 		return None
+	head, tail = req
 	try:
-		sep = raw.find(b"\r\n\r\n")
-		if sep == -1:
-			return None
-		lines = raw[:sep].decode("utf-8", "replace").split("\r\n")
+		lines = head[:-4].decode("utf-8", "replace").split("\r\n")
 		parts = lines[0].split(" ", 2)
 		if len(parts) < 2:
 			return None
@@ -1222,16 +1348,41 @@ def _parse_request(raw):
 				k, v = line.split(":", 1)
 				hdrs[k.strip().lower()] = v.strip()
 		body = {}
-		tail = raw[sep + 4:]
-		if tail:
+		if len(tail):
+			if len(tail) > 1024:
+				gc.collect()
 			try:
 				parsed = ujson.loads(tail)
 				body = parsed if isinstance(parsed, dict) else None
+			except MemoryError:
+				raise   # out of heap, not bad JSON: handle_request answers 500, not 422
 			except Exception:
 				body = None
 		return method, path, hdrs, body
+	except MemoryError:
+		raise
 	except Exception:
 		return None
+
+def _send_all(conn, data, timeout_ms=3000):
+	# A blocking sendall waits forever when lwIP is out of buffers, which wedges the
+	# whole agent; a non-blocking loop with a deadline drops the reply instead.
+	conn.setblocking(False)
+	mv = memoryview(data)
+	deadline = utime.ticks_add(utime.ticks_ms(), timeout_ms)
+	while len(mv):
+		try:
+			n = conn.send(mv)
+		except OSError as e:
+			if not e.args or e.args[0] != uerrno.EAGAIN:
+				raise
+			n = 0
+		if n:
+			mv = mv[n:]
+		elif utime.ticks_diff(deadline, utime.ticks_ms()) <= 0:
+			raise OSError(uerrno.ETIMEDOUT)
+		else:
+			utime.sleep_ms(10)
 
 def _send_empty(conn, status=404):
 	header = (
@@ -1240,7 +1391,7 @@ def _send_empty(conn, status=404):
 		f"Connection: close\r\n\r\n"
 	).encode()
 	try:
-		conn.sendall(header)
+		_send_all(conn, header)
 	except Exception:
 		pass
 
@@ -1253,7 +1404,8 @@ def _send_json(conn, data, status=200):
 		f"Connection: close\r\n\r\n"
 	).encode()
 	try:
-		conn.sendall(header + body)
+		_send_all(conn, header)
+		_send_all(conn, body)
 	except Exception:
 		pass
 
@@ -1367,6 +1519,7 @@ def _http_download(url, dest):
 		except Exception:
 			pass
 
+# Checked before and after the swap; main.py.backup is restored on failure.
 def _do_upgrade(manager):
 	tmp = MAIN_FILE + ".new"
 	bak = MAIN_FILE + ".backup"
@@ -1411,8 +1564,21 @@ def _do_upgrade(manager):
 
 def handle_request(conn, manager):
 	BLINKER.blink(2)
-	raw    = _recv_request(conn)
-	parsed = _parse_request(raw)
+	try:
+		_handle_request(conn, manager)
+	except MemoryError:
+		gc.collect()
+		manager.log("[ERROR] Out of memory while handling a request")
+		_send_json(conn, {"error": "Out of memory"}, 500)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+# Only /hello works without the Api-Key.
+def _handle_request(conn, manager):
+	parsed = _parse_request(_recv_request(conn))
 
 	if not parsed:
 		_send_json(conn, {"error": "Bad request"}, 400)
@@ -1480,7 +1646,15 @@ def handle_request(conn, manager):
 			manager._flush_all()
 			if reboot:
 				utime.sleep_ms(500)
-				machine.reset()
+				try:
+					machine.reset()
+				except Exception as e:
+					manager.log(f"[CONFIG] Reboot failed: {e}; falling back to soft restart")
+					try:
+						machine.soft_reset()
+					except Exception:
+						manager._reload()
+						manager.log("[BOOT] In-process restart via /restart")
 			else:
 				manager._reload()
 				manager.log("[BOOT] In-process restart via /restart")
@@ -1534,8 +1708,7 @@ def main():
 
 	wlan         = network.WLAN(network.STA_IF)
 	wifi_last_ok = utime.time()
-	net_last_ok  = utime.time()
-	last_probe   = 0
+	watchdog     = WifiWatchdog(wlan, manager)
 	boot_blink   = True
 
 	while True:
@@ -1550,20 +1723,15 @@ def main():
 				BLINKER.stop_fast()
 			server.settimeout(0.05 if manager._pending_reverts else 1)
 			now = utime.time()
+			# Dead-man switch: reset after WIFI_DEAD_SECS without Wi-Fi.
 			if wlan.isconnected():
 				wifi_last_ok = now
-				if now - net_last_ok > WIFI_PROBE_SECS and now - last_probe >= 15:
-					last_probe = now
-					if _gateway_alive(wlan):
-						net_last_ok = now
-					elif now - net_last_ok > WIFI_PROBE_SECS + 60:
-						manager._flush_all()
-						machine.reset()
 			elif now - wifi_last_ok > WIFI_DEAD_SECS:
 				manager._flush_all()
 				machine.reset()
+			watchdog.tick(busy=bool(manager._pending_reverts))
 			conn, _ = server.accept()
-			net_last_ok = utime.time()
+			watchdog.traffic()
 			handle_request(conn, manager)
 		except OSError:
 			pass
