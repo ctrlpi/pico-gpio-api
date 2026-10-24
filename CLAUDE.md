@@ -14,7 +14,7 @@ Divergence is only correct where the MicroPython hardware forces it (e.g., HTTPS
 
 ## The README is locked
 
-`README.md` is finished. **Never edit it without the user's explicit confirmation first**, even for small fixes.
+`README.md` is done. Do not edit it without the user's explicit confirmation, even for a small wording or formatting fix, and even to keep it in sync with another project's README.
 
 ## Architecture (`main.py`)
 
@@ -44,7 +44,7 @@ Three files are persisted: `config.json`, `config-backup.json`, and `status.json
 - **Reserved Pins**: GP23/24/25/29 are reserved for the CYW43 wireless chip and are excluded from the API to prevent link drops.
 - **Sensors**: Scripts are `.py` files executed in-process (unlike the Pi's shell scripts). They must reside in `scripts/`.
 - **HTTPS Webhooks**: Restricted to Pico 2 only (`HTTPS_WEBHOOK_OK`). Pico W lacks memory for the handshake.
-- **Request bodies**: `_recv_request` reads `Content-Length` only, capped at `MAX_REQUEST_BYTES` (8 KB): an oversized body is drained (`_drain`) and refused as `400`. A chunked body (no `Content-Length`) is refused the same way rather than decoded, since without this its unread body would reach `/config/load` as `{}`, a full config reset. This differs from the Pi (`413`, chunked decoded) on purpose; `api-tester` test 54 accepts both.
+- **Request bodies**: `_recv_request` reads `Content-Length` only, capped at `MAX_REQUEST_BYTES` (8 KB): an oversized body is refused as `400` and the socket closed with the rest unread (it used to be drained, up to 64 KB, which exhausted the network buffers; a client may see a reset instead of the `400`, which `api-tester` accepts). A chunked body (no `Content-Length`) is refused the same way rather than decoded, since without this its unread body would reach `/config/load` as `{}`, a full config reset. This differs from the Pi (`413`, chunked decoded) on purpose; `api-tester` test 54 accepts both. Replies go out through `_send_json()` in ~512-byte writes built by `_json_pieces()` (byte-for-byte `ujson.dumps`, exact `Content-Length`), so a big reply (scan, config, logs) never needs one block of its full size.
 - **Request memory**: by late in a full tester run the heap is fragmented, so `_recv_request` reads the body into **one `bytearray` sized from `Content-Length`** (never a bytes object regrown per 1 KB chunk) and returns `(head, body)`, and `_parse_request` runs `gc.collect()` before `ujson.loads()` on any body over 1 KB. A `MemoryError` is never reported as bad JSON: it propagates to `handle_request()`, which answers `500 {"error": "Out of memory"}`. That wrapper also closes the socket on every path. Before this, a 4 KB body late in a run came back `422` (the `MemoryError` inside `ujson.loads` was swallowed as a parse failure), which is how test 54 failed intermittently on a Pico W. Ported from `esp32-gpio-api` (f581554), which hit the same thing.
 - **Sending**: replies go out through `_send_all()`, a non-blocking send with a 3 s deadline, header and body sent separately (no concatenated copy). A blocking `sendall` can wait forever when lwIP runs out of buffers, which wedges the single-threaded server.
 

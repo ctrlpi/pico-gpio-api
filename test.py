@@ -353,6 +353,23 @@ class TestPicoGpioApi(unittest.TestCase):
             r = self.post("/sensor/config/pwn", headers=self.headers, json={"script": bad})
             self.assertEqual(r.status_code, 400, f"Expected 400 for injection: {bad}")
 
+    def test_big_replies_exact_length(self):
+        """Replies sent in pieces still carry an exact Content-Length and parse as JSON"""
+        for path in ("/gpio/scan", "/config/read", "/logs", "/gpio/read"):
+            with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
+                s.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\nApi-Key: {self.api_key}\r\n\r\n".encode())
+                raw = b""
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    raw += chunk
+            head, _, body = raw.partition(b"\r\n\r\n")
+            length = next(int(l.split(b":", 1)[1]) for l in head.split(b"\r\n")
+                          if l.lower().startswith(b"content-length:"))
+            self.assertEqual(length, len(body), path)
+            json.loads(body)
+
     def test_logs(self):
         """GET /logs returns log tail list"""
         r = self.get("/logs", headers=self.headers)
@@ -525,6 +542,29 @@ class TestWifiWatchdog(unittest.TestCase):
         self.dog.traffic()
         self.idle(self.reconnect_secs + 5)
         self.assertEqual(self.resets, 0)
+
+
+
+class TestJsonPieces(unittest.TestCase):
+    """_json_pieces joins to exactly what ujson.dumps gives for the same object."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = _load_main()
+
+    def test_matches_dumps(self):
+        samples = [
+            {},
+            [],
+            {"a": 1},
+            {"agent": {"ip": "1.2.3.4", "uptime": "3m"}, "gpios": [{"gpio": 2, "value": 1}, {"gpio": 4, "value": 0}]},
+            {"logs": ["2026-10-23 [Webhook] GPIO 15 \u2192 http://x", "line \"two\""]},
+            {"gpios": {"15": {"type": "output", "init": 0}, "12": {"name": "b", "pullup": None}}, "name": "pico"},
+            {"nested": {"deep": {"deeper": [1, [2, 3], {"x": True}]}}},
+            "plain", 7, None,
+        ]
+        for obj in samples:
+            self.assertEqual("".join(self.app["_json_pieces"](obj)), json.dumps(obj), repr(obj))
 
 
 if __name__ == "__main__":

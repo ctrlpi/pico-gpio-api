@@ -27,7 +27,7 @@ except ImportError:
 FALLBACK_SSID     = "MyNetwork"
 FALLBACK_PASSWORD = "MyPassword"
 DEFAULT_API_KEY   = "your-secret-key"
-VERSION           = "0.9.26"  # agent software version
+VERSION           = "0.9.27"  # agent software version
 DEFAULT_LOG_DAYS  = 7
 PORT              = 8314
 WIFI_DEAD_SECS    = 40    # dead-man switch: hard-reset if WiFi stays lost this long
@@ -1245,38 +1245,6 @@ class WifiWatchdog:
 
 ### HTTP helpers
 
-# Reads and drops a refused request so the client gets the reply.
-def _drain(conn, data, budget=64 * 1024, quiet_ms=1000, max_ms=3000):
-	remaining = -1
-	sep = data.find(b"\r\n\r\n")
-	if sep != -1:
-		for line in data[:sep].decode("utf-8", "replace").split("\r\n")[1:]:
-			if line.lower().startswith("content-length:"):
-				try:
-					remaining = int(line.split(":", 1)[1].strip()) - (len(data) - sep - 4)
-				except Exception:
-					remaining = -1
-				break
-	if remaining == 0:
-		return
-
-	conn.settimeout(quiet_ms / 1000)
-	hard = utime.ticks_add(utime.ticks_ms(), max_ms)
-	try:
-		while budget > 0 and remaining != 0 and utime.ticks_diff(hard, utime.ticks_ms()) > 0:
-			try:
-				chunk = conn.recv(1024)
-			except Exception:
-				return
-			if not chunk:
-				return
-			budget -= len(chunk)
-			if remaining > 0:
-				remaining = max(0, remaining - len(chunk))
-	finally:
-		try: conn.settimeout(2)
-		except Exception: pass
-
 def _recv_request(conn):
 	# Returns (head, body) - head is the request line and headers up to and including
 	# the blank line, body the bytes after it - or None when the request is refused or
@@ -1300,7 +1268,6 @@ def _recv_request(conn):
 		if body is None:
 			data += chunk
 			if len(data) > MAX_REQUEST_BYTES:
-				_drain(conn, data)
 				return None
 			sep = data.find(b"\r\n\r\n")
 			if sep == -1:
@@ -1315,8 +1282,9 @@ def _recv_request(conn):
 				elif low.startswith("transfer-encoding:") and "chunked" in low:
 					chunked = True
 			# Refuse a chunked body (400): without a Content-Length it would read as {}.
+			# A refused request is not read to the end: the 400 goes out and the socket
+			# closes with the rest unread (draining up to 64 KB exhausted network buffers).
 			if chunked or cl > MAX_REQUEST_BYTES:
-				_drain(conn, data)
 				return None
 			if cl == 0:
 				return data[:sep + 4], data[sep + 4:]
@@ -1395,17 +1363,52 @@ def _send_empty(conn, status=404):
 	except Exception:
 		pass
 
+# JSON text of obj in small pieces that join to exactly ujson.dumps(obj); the top two
+# levels (the reply and its lists/maps) are split, anything deeper is one piece.
+def _json_pieces(obj, depth=2):
+	if depth and isinstance(obj, dict):
+		yield "{"
+		first = True
+		for k, v in obj.items():
+			yield ("" if first else ", ") + ujson.dumps(k) + ": "
+			first = False
+			yield from _json_pieces(v, depth - 1)
+		yield "}"
+	elif depth and isinstance(obj, list):
+		yield "["
+		for i, v in enumerate(obj):
+			if i:
+				yield ", "
+			yield from _json_pieces(v, depth - 1)
+		yield "]"
+	else:
+		yield ujson.dumps(obj)
+
+# The body is never built as one string: sized from its pieces first, then sent in
+# writes of about SEND_CHUNK bytes, so a big reply (scan, config, logs) needs no large block.
+SEND_CHUNK = 512
+
 def _send_json(conn, data, status=200):
-	body = ujson.dumps(data).encode()
-	header = (
+	size = 0
+	for piece in _json_pieces(data):
+		size += len(piece.encode())
+	out = [(
 		f"HTTP/1.1 {status} {_STATUS_TEXT.get(status, 'Error')}\r\n"
 		f"Content-Type: application/json\r\n"
-		f"Content-Length: {len(body)}\r\n"
+		f"Content-Length: {size}\r\n"
 		f"Connection: close\r\n\r\n"
-	).encode()
+	).encode()]
+	n = len(out[0])
 	try:
-		_send_all(conn, header)
-		_send_all(conn, body)
+		for piece in _json_pieces(data):
+			b = piece.encode()
+			out.append(b)
+			n += len(b)
+			if n >= SEND_CHUNK:
+				_send_all(conn, b"".join(out))
+				out, n = [], 0
+		if out:
+			_send_all(conn, b"".join(out))
 	except Exception:
 		pass
 

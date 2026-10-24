@@ -1,7 +1,7 @@
 # Raspberry Pi Pico GPIO API
 
 [![Platform: Raspberry Pi Pico W](https://img.shields.io/badge/platform-Raspberry%20Pi%20Pico-006400.svg)](#install-on-your-pico-w)
-[![Version 0.9.26](https://img.shields.io/badge/version-0.9.26-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
+[![Version 0.9.27](https://img.shields.io/badge/version-0.9.27-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
 [![MicroPython 1.29](https://img.shields.io/badge/runtime-MicroPython%201.29-blue.svg)](#install-on-your-pico-w)
 [![Auth: Api-Key](https://img.shields.io/badge/auth-Api--Key-orange.svg)](#authentication)
 [![License: MIT](https://img.shields.io/badge/license-MIT-188038.svg)](LICENSE)
@@ -449,11 +449,11 @@ It carries no pin fields; consumers of the webhook feed should treat entries wit
 
 ### Authentication
 
-If a dedicated `webhook_key` is configured, it is sent as the `Api-Key` header on every webhook POST; if not, no `Api-Key` header is sent at all. The agent's own `api_key` is never sent to the webhook target. The public `https://ctrlpi.com/webhook/test` test endpoint requires no key, it will display whatever key was sent for debugging.
+If a dedicated `webhook_key` is configured, it is sent as the `Api-Key` header on every webhook POST; if not, no `Api-Key` header is sent at all. The agent's own `api_key` is never sent to the webhook target. The public `https://hooks.ctrlpi.com/webhook/test` test endpoint requires no key, it will display whatever key was sent for debugging.
 
 ### Testing webhooks
 
-For development and testing, ctrlPi provides a public test endpoint: point `webhook_url` at `https://ctrlpi.com/webhook/test` and monitor the incoming events live at [https://ctrlpi.com/webhook/watch](https://ctrlpi.com/webhook/watch). The feed is public and events are retained only briefly, so use it for verification during setup, not as a production target. (On an original Pico W this target is unreachable - see [https targets](#https-targets-pico-w-vs-pico-2-w) above.)
+For development and testing, ctrlPi provides a public test endpoint: point `webhook_url` at `https://hooks.ctrlpi.com/webhook/test` and monitor the incoming events live at [https://ctrlpi.com/webhook/watch](https://ctrlpi.com/webhook/watch). The feed is public and events are retained only briefly, so use it for verification during setup, not as a production target. (On an original Pico W this target is unreachable - see [https targets](#https-targets-pico-w-vs-pico-2-w) above.)
 
 ### Changing the URL
 
