@@ -1,7 +1,7 @@
 # Raspberry Pi Pico GPIO API
 
 [![Platform: Raspberry Pi Pico W](https://img.shields.io/badge/platform-Raspberry%20Pi%20Pico-006400.svg)](#install-on-your-pico-w)
-[![Version 0.9.27](https://img.shields.io/badge/version-0.9.27-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
+[![Version 0.9.30](https://img.shields.io/badge/version-0.9.30-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
 [![MicroPython 1.29](https://img.shields.io/badge/runtime-MicroPython%201.29-blue.svg)](#install-on-your-pico-w)
 [![Auth: Api-Key](https://img.shields.io/badge/auth-Api--Key-orange.svg)](#authentication)
 [![License: MIT](https://img.shields.io/badge/license-MIT-188038.svg)](LICENSE)
@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/ctrlpi/pico-gpio-api/main/install.s
 
 `install.sh` checks the *connected device* for an existing `config.json`/`wifi.txt` and asks only for what's missing: an API key + agent name (a blank name keeps the device's own unique `pico-<serial4>` default), and/or WiFi SSID/password. It then copies everything onto every Pico on USB via `mpremote` and resets it. The local `config.json`/`wifi.txt` staged for that copy are deleted right after, so credentials don't linger on disk.
 
-Re-running the downloaded copy directly (`./install.sh`) is safe any time: it redeploys `main.py`, skips both prompts once the device has them, and never overwrites the device's own `config.json` (see [Files](#files) below) - it won't re-download the files unless run with `./install.sh --upgrade`.
+Re-running the downloaded copy directly (`./install.sh`) is safe any time: it redeploys `app.mpy`, `upgrader.mpy` and `main.py`, skips both prompts once the device has them, and never overwrites the device's own `config.json` (see [Files](#files) below) - it won't re-download the files unless run with `./install.sh --upgrade`.
 
 - `./install.sh --config`: re-ask for the API key/agent name and push it, even if the device already has `config.json`.
 - `./install.sh --wifi`: re-ask for WiFi SSID/password and push it, even if the device already has `wifi.txt`.
@@ -56,18 +56,22 @@ cd pico-gpio-api
 ./install.sh
 ```
 
-Or skip `install.sh` entirely and copy the files by hand to the Pico: `main.py` (via Thonny or `mpremote`), and a `wifi.txt` (see `wifi.txt.example`):
+Or skip `install.sh` entirely and copy the files by hand to the Pico: `app.mpy`, `upgrader.mpy` and `main.py` (via Thonny or `mpremote`), and a `wifi.txt` (see `wifi.txt.example`). The `.mpy` files come with the release; `./build.sh` rebuilds them from `app.py` and `upgrader.py`.
 
 ```
 SSID = YourNetwork
 PASSWORD = YourPassword
 ```
 
-`main.py` parses this file directly (one `KEY = value` per line). If absent, the `FALLBACK_SSID` / `FALLBACK_PASSWORD` constants in `main.py` are used. The API key defaults to `"your-secret-key"`; change it via `POST /config/update` or by editing `config.json`.
+The agent parses this file directly (one `KEY = value` per line). If absent, the `FALLBACK_SSID` / `FALLBACK_PASSWORD` constants in `app.py` are used. The API key defaults to `"your-secret-key"`; change it via `POST /config/update` or by editing `config.json`.
 
 ### Run automatically at boot
 
-Nothing to set up: the firmware auto-runs `main.py` at power-on, so once the files are on the device the server starts by itself every boot.
+Nothing to set up: the firmware auto-runs `main.py` at power-on, which loads the agent from `app.mpy` (or `upgrader.mpy` during an upgrade), so once the files are on the device the server starts by itself every boot.
+
+`app.mpy` is the agent precompiled by `mpy-cross` (`build.sh`, MicroPython 1.29). The board loads it ready to run instead of compiling the source, which a Pico W does not have the RAM for. The same `app.mpy` runs on the Pico W and the Pico 2 W.
+
+**Upgrading from 0.9.27 or earlier:** those versions ran a single `main.py`, and their `/upgrade` refuses the new files (`502`, the board keeps running). Install once over USB with Pico Bay or `install.sh`; `/upgrade` works from then on.
 
 The server binds **`0.0.0.0`** (all interfaces) and port **8314**, so it is reachable on your local network; keep it behind a trusted LAN (see the No-TLS note under Authentication).
 
@@ -173,7 +177,7 @@ The core of the API: read, write, configure, and watch GPIO pins. Every pin is a
 | `POST` | `/gpio/write/{name_or_gpio}` | Write a value to a pin |
 | `POST` | `/gpio/config/{name_or_gpio}` | Configure a pin (name, type, init, pullup, max, reversed, watched) |
 | `GET` | `/gpio/watched` | List all currently watched pins, the active webhook URL, and the `bridges` callback URLs (URLs only, never the keys) |
-| `GET` | `/gpio/scan` | Scan all usable pins: GP0-GP28 minus GP23/24/25/29, which are wired to the CYW43 WiFi chip (touching them drops the wireless link; they're also rejected with a `400` on read/write/config and stripped from loaded configs). Returns `level` (the physical state) and `value` (logical). Also returns the live `agent` block; the pin map is keyed `gpios`. |
+| `GET` | `/gpio/scan` | Scan all usable pins: GP0-GP28 minus GP23/24/25/29, which are wired to the CYW43 WiFi chip (touching them drops the wireless link; they're also rejected with a `400` on read/write/config and stripped from loaded configs). Returns `level` (the physical state) for every pin, and `value` (logical) and `reversed` only for a reversed pin. Also returns the live `agent` block; the pin map is keyed `gpios`. |
 
 ### Request Bodies
 
@@ -249,7 +253,7 @@ Sensors are pure config plus on-demand reads: no pins, no background polling, no
 
 ### Configure
 
-Scripts live in the **`scripts/` folder** on the Pico's filesystem. `install.sh` creates it and seeds it with a short `cpu-temp.py` example; upload your own with `mpremote fs cp weather.py :scripts/weather.py` or with Pico Bay (the agent itself never creates the folder - with no folder, every sensor just reads `script not found`).
+Scripts live in the **`scripts/` folder** on the Pico's filesystem. `install.sh` creates it and seeds it with a short `cpu-temp.py` example; upload your own with `mpremote fs cp weather.py :scripts/weather.py` with Pico Bay, or over the API (see [Scripts](#scripts)). The agent creates the folder only on a `/script/write`; with no folder, every sensor just reads `script not found`.
 
 A Pico has **no shell**, so unlike the Pi a `script` sensor is a MicroPython `.py` file the agent execs in-process. Scripts can have arguments as `"<file.py> [args...]"`, where the file is a **bare filename** in `scripts/`: no paths, no `..`, no leading dot, no subfolders. The file should either define a `read()` function (called as `read(*args)`) or set a module-level `result` (with the arg list also available as `args` in the namespace), so one script can be reused with different params. Arguments may contain letters and digits only. The returned value can be any JSON-serializable object: a dict, number, or string.
 
@@ -260,7 +264,7 @@ curl -X POST http://<pico-host-addr>:8314/sensor/config/zone1 \
   -d '{"script": "weather.py zone1"}'
 ```
 
-`scripts/` is the **only** folder a sensor can run anything from. That folder is hardcoded (no config field or API call can widen it), so a holder of the API key can never point a sensor at an arbitrary file on the device: not the agent's own credential or state files (`wifi.txt`, `config.json`, etc.), and not `main.py` itself. Scripts run with the server's privileges; keep the agent on a trusted LAN, as with the rest of the API.
+`scripts/` is the **only** folder a sensor can run anything from. That folder is hardcoded (no config field or API call can widen it), so a holder of the API key can never point a sensor at an arbitrary file on the device: not the agent's own credential or state files (`wifi.txt`, `config.json`, etc.), and not `main.py` itself. Scripts run with the server's privileges; keep the agent on a trusted LAN, as with the rest of the API. Once a key holder can write scripts (see [Scripts](#scripts)), they can run any code on the board: lock writes with `write.lock` when you don't need them.
 
 Reading returns a clear message instead of failing when a script is missing or broken: `{"<name>": "script not found"}`, `{"<name>": "script failed or did not produce output"}` when the script errors or its `read()`/`result` yields nothing, and `{"<name>": "blocked: <reason>"}` when a sensor violates the name/argument rules (possible when sensors arrive via `/config/load` or an edited `config.json`; every read re-validates).
 
@@ -279,6 +283,95 @@ curl -H "Api-Key: your-secret-key" http://<pico-host-addr>:8314/sensor/read
 # → {"weather": {"pressure": 1013, "humidity": 62}, "probe": 21.4}
 ```
 
+## Scripts
+
+List, read, write and run the files in `scripts/`, the same folder sensors run from.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/script/list` | Every file in `scripts/`, plus whether writes are allowed |
+| `GET` | `/script/read/{name}` | One file's text |
+| `POST` | `/script/write/{name}` | Create or overwrite a file, or delete it |
+| `POST` | `/script/run/{name}` | Run a file and return its output and exit code |
+
+`{name}` is a **bare filename** of up to 32 characters: letters, digits, `.`, `_` and `-`, no leading dot or `-`, so no paths, no `..` and no subfolders (`400` otherwise). Subfolders of `scripts/` are never listed, read, written or run. A file that isn't there returns `404`.
+
+### Request Bodies
+
+#### `POST /script/write/{name}`
+
+```json
+{
+  "content": "def read(*args):\n    return 42\n"
+}
+```
+
+Or, to delete the file:
+
+```json
+{
+  "remove": true
+}
+```
+
+Writing an existing name replaces it. The new text is written to a temporary file and renamed into place, so a run never sees half a script. A script can be up to about 8 KB (the request limit).
+
+#### `POST /script/run/{name}`
+
+The body is optional:
+
+```json
+{
+  "args": ["21"]
+}
+```
+
+Arguments may contain letters and digits only.
+
+### Responses
+
+```bash
+curl -H "Api-Key: <key>" http://<pico-host-addr>:8314/script/list
+# → {"scripts": [{"name": "cpu-temp.py", "size": 118, "modified": "2026-10-24 09:12:03"}], "write": "enabled"}
+
+curl -H "Api-Key: <key>" http://<pico-host-addr>:8314/script/read/cpu-temp.py
+# → {"name": "cpu-temp.py", "content": "..."}
+
+curl -X POST -H "Api-Key: <key>" -H "Content-Type: application/json" \
+  -d '{"content": "result = 42"}' http://<pico-host-addr>:8314/script/write/answer.py
+# → {"name": "answer.py", "size": 11}       (delete: {"name": "answer.py", "status": "removed"} or "not found")
+
+curl -X POST -H "Api-Key: <key>" http://<pico-host-addr>:8314/script/run/answer.py
+# → {"name": "answer.py", "exit_code": 0, "output": "42"}
+```
+
+A run works like a sensor read: the file is exec'd in-process as MicroPython, and `output` is what its `read(*args)` returns, or its `result`, as text (a string as is, anything else as JSON; first 2 KB, trailing whitespace trimmed). `print()` goes to the USB console, not to `output`. A script that raises returns `exit_code` `1` and `"<Error>: <message>"` as `output`; otherwise `exit_code` is `0`. There is no timeout: a script that never returns stalls the agent, as a sensor would.
+
+### Write protection
+
+`list`, `read` and `run` always work. `/script/write` (including a delete) returns `403` when:
+
+- the agent's `api_key` is still the shipped default `your-secret-key` (`"write": "default_key"` in the list), so set your own key first;
+- a file named **`write.lock`** is in `scripts/` (`"write": "locked"`). Its content doesn't matter. The lock covers `write.lock` too: `/script/write` can't change or delete it.
+
+A fresh install has no lock. To lock, write the file over the API:
+
+```bash
+curl -X POST -H "Api-Key: <key>" -H "Content-Type: application/json" -d '{"content": ""}' http://<pico-host-addr>:8314/script/write/write.lock
+```
+
+To unlock, remove it with the Pico on USB (`+ reset` restarts the agent, which `mpremote` stops):
+
+```bash
+mpremote fs rm :scripts/write.lock + reset
+```
+
+Or run `./install.sh --unlock` in the `pico-gpio-api` folder: it installs nothing, removes the lock from every Pico on USB and resets each one.
+
+The lock blocks writes over the API, not code. `/script/run` still works while locked, and a script runs inside the agent with access to the whole filesystem, so one that deletes files can remove `write.lock`. A lock keeps the folder read-only only if you trust the scripts already in it.
+
+`write.lock` shows up in `/script/list` like any other file, and running it returns `400`.
+
 ## Agent Setup
 
 Read and change the agent's own configuration, and drive process and device lifecycle (restart, upgrade, logs).
@@ -288,15 +381,15 @@ Read and change the agent's own configuration, and drive process and device life
 | `GET` | `/config/read` | Read the agent identity + full config (see response fields below) |
 | `POST` | `/config/update` | Update one or more config fields (backs up the current config first) |
 | `POST` | `/config/load` | Load a full config from a JSON dict (backs up the current config first; pass `{}` to reset) |
-| `POST` | `/upgrade` | Upgrade in place. Takes no body. Downloads the latest `main.py`, moves the current one to `main.py.backup`, installs the new one, then resets (see below) |
+| `POST` | `/upgrade` | Upgrade in place. Takes no body. Restarts into `upgrader.mpy`, which downloads the latest `app.mpy`, `upgrader.mpy` and `main.py`, keeps the current ones as `.backup`, installs the new ones, then starts the agent (see below) |
 | `POST` | `/restart` | Restart the device. Body is optional; pass `{"reboot": true}` to request a full hardware reset instead (see below) |
 | `GET` | `/logs` | Last 30 log lines as a JSON array (in-memory ring buffer, cleared on reboot) |
 
 **Restart/reboot (`/restart`)**: a plain `/restart` reloads the agent in place (config, pins and watches are set up again, and WiFi stays connected). `{"reboot": true}` does a full hardware reset with `machine.reset()`. Both reply first, with `{"status": "restarting"}` or `{"status": "rebooting"}`.
 
-**Self-upgrade (`/upgrade`)**: downloads the canonical `main.py` (from `raw.githubusercontent.com/ctrlpi/pico-gpio-api/main/main.py`) over TLS straight to flash. The download is verified before anything is swapped: a completed transfer (a short or truncated body is an error, never a partial file), non-trivial size, the expected banner and imports at the head, no NUL bytes anywhere, a byte count matching what was written, and the trailing `main()` call that any truncation would lose. Only then is the current `main.py` renamed to `main.py.backup` and the new file put in its place, and the same check is run again on the installed file: if it fails there, `main.py.backup` is restored and the board is left running the code it already had. If the download or either check fails, nothing is swapped and the board keeps running the current code. Config, `wifi.txt`, and status files are left untouched.
+**Self-upgrade (`/upgrade`)** runs in its own boot, so the TLS download has the memory a running agent no longer has. The agent writes `upgrade.lock`, sends `{"status": "upgrading"}`, closes the connection and soft-resets (WiFi stays connected); `main.py` then loads `upgrader.mpy` instead of the agent. The upgrader downloads `app.mpy`, `upgrader.mpy` and `main.py` (from `raw.githubusercontent.com/ctrlpi/pico-gpio-api/main/`) over TLS straight to flash, each as `<name>.new`. Every download is checked before anything is swapped: a completed transfer (a short or truncated body is an error, never a partial file), a minimum size, an `.mpy` header for the `.mpy` files and Python text for `main.py`, and a byte count matching what was written. Only when all pass are the current files renamed to `<name>.backup` and the new ones put in place, and the same check runs again on the installed files: if anything fails there, the backups are restored. Then the upgrader removes the lock and starts the agent, which logs the outcome once: `[UPGRADE] Done, now <version>: ...` or `[UPGRADE] Failed, still <version>: ...`. A failed attempt resets and tries again, up to 3 times; after that the board keeps running the code it already had. An upgrade usually takes about 10 seconds. Config, `wifi.txt`, and status files are left untouched.
 
-The response is sent and the connection closed before the device resets, so the client sees the reply before the Pico drops off WiFi and reconnects.
+**Upgrading from an older version:** `/upgrade` runs from `upgrader.mpy`, which older versions don't install, and a board without it answers `/upgrade` with `500`. Install once over USB with `install.sh`; `/upgrade` works from then on.
 
 ### `GET /config/read` response
 
@@ -362,6 +455,7 @@ Error responses are JSON `{"error": ...}`, except 404 which has an empty body:
 |--------|------|------|
 | `400` | Bad write/config (e.g. writing to a pin configured as `input`/`vcc`/`gnd`, invalid value), or a request over **8 KB** | `{"error": "<reason>"}`, and `{"error": "Bad request"}` for the oversized case - a board with 264 KB of RAM stops reading rather than buffering the whole thing to classify it, so it is refused as unparseable rather than with a `413` |
 | `403` | Missing or wrong `Api-Key` header | `{"error": "Invalid or missing Api-Key header"}` |
+| `403` | `/script/write` refused (default key, or `write.lock` in place; see [Scripts](#write-protection)) | `{"error": "<reason>"}` |
 | `404` | Unknown pin/name, or unknown route | empty |
 | `422` | Request body fails validation (malformed JSON, or a required field missing such as `value` on `POST /gpio/write/{pin}`) | `{"error": "<reason>"}`. Unlike the Pi, `GET /gpio/scan` never returns 422: the Pico's GPIOs are always available. |
 
@@ -389,7 +483,7 @@ The **Pico 2 W (RP2350)** has the memory headroom and is unaffected: `https://` 
 
 This applies to `webhook_url` only. The `bridges.homekit` / `bridges.matter` / `bridges.homebridge` callbacks are LAN targets that are already plain http, and plain http is unaffected on both boards.
 
-For the same reason, a remote `POST /upgrade` on a Pico W may fail at the TLS handshake, since it downloads `main.py` over https. Retry, or install over USB with `install.sh` (or copy the file with `mpremote`).
+`POST /upgrade` downloads over https too, but in its own boot without the agent loaded, where a Pico W has the memory for the handshake. If an upgrade still fails, the upgrader tries 3 times and the board keeps its current version, with the reason in `/logs`; install over USB with `install.sh` instead (or copy the files with `mpremote`).
 
 ### Delivery and retries
 
@@ -467,7 +561,7 @@ curl -X POST http://<pico-host-addr>:8314/config/update \
 
 ## Files
 
-The state the agent persists to disk, all on the Pico's filesystem alongside `main.py`. Each is created on first run as needed, so there's nothing to set up by hand.
+The state the agent persists to disk, all on the Pico's filesystem alongside `app.mpy`, `upgrader.mpy` and `main.py`. Each is created on first run as needed, so there's nothing to set up by hand.
 
 | File | Contents |
 |------|----------|
@@ -484,6 +578,7 @@ The state the agent persists to disk, all on the Pico's filesystem alongside `ma
 | Sensor scripts | `.sh`, run as `sh scripts/<file>` | `.py`, exec'd in-process |
 | Interactive API docs (`/docs`, `/redoc`) | Yes (`settings.docs_enabled`) | No |
 | Logs | File (`agent.log`), last 50 lines via `/logs` | In-memory ring buffer, last 30 lines via `/logs`, cleared on reboot |
+| Clock | System time | NTP at boot, retried every 2 min until set |
 | https webhook targets | Always available | Pico 2 W only (see [https targets](#https-targets-pico-w-vs-pico-2-w)) |
 
 ## Pico 2 W (RP2350) note

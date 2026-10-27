@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 # Usage: curl -fsSL https://raw.githubusercontent.com/ctrlpi/pico-gpio-api/main/install.sh | bash
 #
-# Downloads the release files (no git required), then deploys main.py, config.json,
+# Downloads the release files (no git required), then deploys app.mpy, upgrader.mpy, main.py, config.json,
 # wifi.txt and a seeded scripts/cpu-temp.py to every Pico on USB via mpremote.
 # Runs on your Mac/PC - MicroPython has no shell to run this on the device itself.
 # Downloads only when piped into a shell or run with --upgrade; a plain ./install.sh
 # just redeploys what is already on disk. Prompts only for what the device lacks.
 #
-#   ./install.sh              # full deploy: main.py + config.json + wifi.txt + scripts/cpu-temp.py
+#   ./install.sh              # full deploy: app.mpy + upgrader.mpy + main.py + config.json + wifi.txt + scripts/cpu-temp.py
 #   ./install.sh --config     # re-ask for API key/agent name even if the device already has config.json
 #   ./install.sh --wifi       # re-ask for WiFi SSID/password even if the device already has wifi.txt
+#   ./install.sh --unlock     # install nothing: delete scripts/write.lock on every Pico, then reset it
 set -euo pipefail
 
 BASE_URL="https://raw.githubusercontent.com/ctrlpi/pico-gpio-api/main"
 
 
 
-FILES="main.py install.sh LICENSE README.md"
+FILES="app.py app.mpy upgrader.py upgrader.mpy main.py build.sh install.sh LICENSE README.md"
 DIR="pico-gpio-api"
 SHELLS=(bash sh dash zsh ksh ash)
 
@@ -27,11 +28,14 @@ for s in "${SHELLS[@]}"; do
 done
 FORCE_WIFI=false
 FORCE_CONFIG=false
+UNLOCK=false
 for arg in "$@"; do
   [ "$arg" = "--upgrade" ] && DOWNLOAD=true
   [ "$arg" = "--wifi" ] && FORCE_WIFI=true
   [ "$arg" = "--config" ] && FORCE_CONFIG=true
+  [ "$arg" = "--unlock" ] && UNLOCK=true
 done
+[ "$UNLOCK" = false ] || DOWNLOAD=false
 
 if [ "$DOWNLOAD" = true ] && ! command -v curl >/dev/null 2>&1; then
   echo "Error: curl is required. Install it first (e.g. brew install curl)." >&2
@@ -51,7 +55,7 @@ if [ "$DOWNLOAD" = true ]; then
     curl -fsSL "$BASE_URL/$f" -o "$DIR/$f.tmp"
     mv "$DIR/$f.tmp" "$DIR/$f"   # only replace the old copy once the download completed
   done
-  chmod +x "$DIR/install.sh"
+  chmod +x "$DIR/install.sh" "$DIR/build.sh"
 fi
 
 # --- venv + mpremote ---
@@ -64,6 +68,20 @@ if [ ! -x "$VENV_DIR/bin/python" ] || ! "$VENV_DIR/bin/python" -c '' 2>/dev/null
   "$VENV_DIR/bin/pip" install --quiet --upgrade pip mpremote
 fi
 MPREMOTE="$VENV_DIR/bin/mpremote"
+
+# The board runs app.mpy and upgrader.mpy, compiled by build.sh; rebuilt when a source is newer.
+if [ "$UNLOCK" = false ]; then
+  for f in app.py upgrader.py main.py build.sh; do
+    if [ ! -f "$DIR/$f" ]; then
+      echo "ERROR: missing $DIR/$f. Restore the local file or run ./install.sh --upgrade." >&2
+      exit 1
+    fi
+  done
+  if [ ! -f "$DIR/app.mpy" ] || [ "$DIR/app.py" -nt "$DIR/app.mpy" ] ||
+     [ ! -f "$DIR/upgrader.mpy" ] || [ "$DIR/upgrader.py" -nt "$DIR/upgrader.mpy" ]; then
+    "$DIR/build.sh"
+  fi
+fi
 
 ask() {
   # Prompt for input with default fallback.
@@ -98,11 +116,46 @@ ask_required() {
   printf '%s' "$ans"
 }
 
-# Find connected Picos.
-DEVICES=(/dev/cu.usbmodem*)
-if [ ! -e "${DEVICES[0]}" ]; then
-  echo "ERROR: no Pico found (no /dev/cu.usbmodem* device)." >&2
+# Find connected Picos: each port is asked what it is, and only a Pico W or Pico 2 W running
+# MicroPython is installed. Asking stops the board's program, so any other board that answers
+# is reset and carries on.
+shopt -s nullglob
+CANDIDATES=(/dev/cu.usbmodem*)
+shopt -u nullglob
+DEVICES=()
+PICO_W='pico (2 )?w( |$)'
+for DEV in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+  BOARD="$("$MPREMOTE" connect "$DEV" exec "import os; print(os.uname().sysname + '|' + os.uname().machine)" 2>/dev/null | tr -d '\r' | tail -1)" || BOARD=""
+  MACHINE="$(printf '%s' "${BOARD#*|}" | tr '[:upper:]' '[:lower:]')"
+  if [ "${BOARD%%|*}" = "rp2" ] && [[ $MACHINE =~ $PICO_W ]]; then
+    DEVICES+=("$DEV")
+  elif [ -n "$BOARD" ]; then
+    echo "Skipping $DEV: ${BOARD#*|} is not a Pico W or Pico 2 W"
+    "$MPREMOTE" connect "$DEV" reset >/dev/null 2>&1 || true
+  fi
+done
+if [ "${#DEVICES[@]}" -eq 0 ]; then
+  echo "ERROR: no MicroPython Pico W or Pico 2 W found on USB." >&2
   exit 1
+fi
+echo "Found ${#DEVICES[@]} Pico(s): ${DEVICES[*]}"
+
+# --unlock: only delete scripts/write.lock (/script/write can create it, never remove it). mpremote
+# stops the running agent, so every board is reset afterwards, locked or not.
+if [ "$UNLOCK" = true ]; then
+  FAILED=0
+  for DEV in "${DEVICES[@]}"; do
+    if ! "$MPREMOTE" connect "$DEV" fs cat :scripts/write.lock >/dev/null 2>&1; then
+      echo "$DEV: no scripts/write.lock, script writes were not locked."
+    elif "$MPREMOTE" connect "$DEV" fs rm :scripts/write.lock >/dev/null; then
+      echo "$DEV: removed scripts/write.lock, script writes are unlocked."
+    else
+      echo "  FAILED: $DEV - could not remove scripts/write.lock" >&2
+      FAILED=1
+    fi
+    "$MPREMOTE" connect "$DEV" reset >/dev/null 2>&1 || true
+  done
+  exit "$FAILED"
 fi
 
 # Check and prompt for config.json if missing from device.
@@ -166,6 +219,10 @@ for DEV in "${DEVICES[@]}"; do
   # mkdir :scripts errors once the folder exists, so it's tolerated either way.
   [ "$NEED_SCRIPT" = false ] || "$MPREMOTE" connect "$DEV" fs mkdir :scripts >/dev/null 2>&1 || true
   if ! {
+    # A leftover upgrade.lock would boot the upgrader and replace what is installed here.
+    "$MPREMOTE" connect "$DEV" exec "import os; 'upgrade.lock' in os.listdir() and os.remove('upgrade.lock')" &&
+    "$MPREMOTE" connect "$DEV" cp "$DIR/app.mpy" :app.mpy &&
+    "$MPREMOTE" connect "$DEV" cp "$DIR/upgrader.mpy" :upgrader.mpy &&
     "$MPREMOTE" connect "$DEV" cp "$DIR/main.py" :main.py &&
     { [ "$NEED_CONFIG" = false ] || "$MPREMOTE" connect "$DEV" cp "$CONFIG_FILE" :config.json; } &&
     { [ "$NEED_WIFI" = false ] || "$MPREMOTE" connect "$DEV" cp "$WIFI_FILE" :wifi.txt; } &&
