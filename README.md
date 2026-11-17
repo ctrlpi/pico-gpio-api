@@ -1,7 +1,7 @@
 # Raspberry Pi Pico GPIO API
 
 [![Platform: Raspberry Pi Pico W](https://img.shields.io/badge/platform-Raspberry%20Pi%20Pico-006400.svg)](#install-on-your-pico-w)
-[![Version 0.9.30](https://img.shields.io/badge/version-0.9.30-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
+[![Version 0.9.31](https://img.shields.io/badge/version-0.9.31-blue.svg)](https://github.com/ctrlpi/pico-gpio-api/tags)
 [![MicroPython 1.29](https://img.shields.io/badge/runtime-MicroPython%201.29-blue.svg)](#install-on-your-pico-w)
 [![Auth: Api-Key](https://img.shields.io/badge/auth-Api--Key-orange.svg)](#authentication)
 [![License: MIT](https://img.shields.io/badge/license-MIT-188038.svg)](LICENSE)
@@ -17,14 +17,14 @@ It is the Pico port of [pi-gpio-api](https://github.com/ctrlpi/pi-gpio-api): sam
 
 ## Install on your Pico W
 
-**Requirements:** MicroPython firmware flashed on a Raspberry Pi Pico W or Pico 2 W ([micropython.org/download/RPI_PICO_W](https://micropython.org/download/RPI_PICO_W/)), and a Mac/PC to run Pico Bay or `install.sh` from.
+**Requirements:** MicroPython firmware flashed on a Raspberry Pi Pico W or Pico 2 W, and a Mac/PC to run Pico Bay or `install.sh` from.
 
-Pico Bay or `install.sh` always runs on your Mac/PC, never on the Pico itself (MicroPython has no shell to run it in). Plug the Pico in over USB and run it.
+Pico Bay or `install.sh` runs on your computer: plug the Pico in over USB and run it.
 
 ### Option 1: Pico Bay (easiest)
 
 ```bash
-npx @ctrlpi/pico-bay
+npx pico-bay
 ```
 
 Connect your board and choose **Install ctrlPi API** from the top right menu. You will be prompted to fill in your API key and WiFi information.
@@ -496,11 +496,11 @@ attempt is logged, with the reason and whether another is coming.
 ### Bridge callbacks (`bridges.homekit` / `bridges.matter` / `bridges.homebridge`)
 
 Three extra callback URLs, one owned by each smart-home bridge, sit alongside `webhook_url`:
-`homekit` for the standalone `homekit-bridge`, `matter` for `matter-bridge`, and `homebridge`
+`homekit` for a standalone HomeKit bridge, `matter` for `ctrlpi-matter`, and `homebridge`
 for the `homebridge-ctrlpi` plugin. They are **additive**: a watched event is POSTed to every
 configured target, with the same payload, so the bridges and `webhook_url` never compete.
 
-`homebridge` has its own slot, so the Homebridge plugin and the standalone `homekit-bridge`
+`homebridge` has its own slot, so the Homebridge plugin and a standalone HomeKit bridge
 can drive the same agent at once.
 
 ```bash
@@ -509,7 +509,7 @@ curl -X POST http://<pico-host-addr>:8314/config/update \
   -d '{"matter": "http://192.168.1.50:8317/webhook?agent=pico"}'
 ```
 
-`homekit-bridge`, `matter-bridge` and `homebridge-ctrlpi` set these themselves at startup, so
+`ctrlpi-matter` and `homebridge-ctrlpi` set these themselves at startup, so
 you normally never touch them by hand. An empty string clears one. All three are reported by `/config/read` and
 `/gpio/watched` under `bridges` (the latter carries the URLs only, never the keys). The group
 **merges key by key**, so setting one bridge's fields never disturbs another's.
@@ -612,14 +612,13 @@ The test suite runs the MicroPython server locally using a lightweight mock hard
 
 - **[`pi-gpio-api`](https://github.com/ctrlpi/pi-gpio-api)**: Raspberry Pi GPIO REST server that reads inputs and drives outputs (and named sensors) over an HTTP API.
 - **[`esp32-gpio-api`](https://github.com/ctrlpi/esp32-gpio-api)**: ESP32 port of the GPIO REST server for MicroPython, with the same endpoints, wire format, and auth.
-- **[`mcp-bridge`](https://github.com/ctrlpi/mcp-bridge)**: MCP server that exposes GPIO control as tools for AI agents (e.g. Claude), executing them over the agents' REST API.
+- **[`ctrlpi-mcp`](https://github.com/ctrlpi/ctrlpi-mcp)**: MCP server that exposes GPIO control as tools for AI agents (e.g. Claude), executing them over the agents' REST API.
 - **[`homebridge-ctrlpi`](https://github.com/ctrlpi/homebridge-ctrlpi)**: A Homebridge plugin that brings Raspberry Pi, Pico W, and ESP32 GPIO into Apple Home, by driving one or more GPIO agents over their REST API.
-- **`homekit-bridge`** *(coming soon)*: Native Apple HomeKit bridge that exposes GPIO pins and sensors as HomeKit accessories, driven over the agents' REST API.
-- **`matter-bridge`** *(coming soon)*: Matter bridge that exposes GPIO pins and sensors to any Matter platform (Apple Home, Google Home, Alexa, Home Assistant), driven over the agents' REST API.
+- **`ctrlpi-matter`** *(coming soon)*: Matter bridge that exposes GPIO pins and sensors to any Matter platform (Apple Home, Google Home, Alexa, Home Assistant), driven over the agents' REST API.
 - **[`ctrlpi-cli`](https://github.com/ctrlpi/ctrlpi-cli)**: Command-line interface for interacting with ctrlPi agents, with shared agent configuration.
 - **[`ctrlpi-lab`](https://github.com/ctrlpi/ctrlpi-lab)**: A local browser dashboard for your ctrlPi setup. Test GPIO and sensor endpoints, watch webhook events, and tail agent logs.
 - **[`pico-bay`](https://github.com/ctrlpi/pico-bay)**: Web app and MCP server for managing MicroPython and CircuitPython boards, such as the Raspberry Pi Pico and ESP32, over USB.
-- **`pi-bay`** *(coming soon)*: A local web app and MCP server for Raspberry Pi boards over the network. Edit files, open a remote terminal, and manage your Pi remotely.
+- **[`pi-bay`](https://github.com/ctrlpi/pi-bay)**: A local web app and MCP server for Raspberry Pi boards over the network. Edit files, open a remote terminal, and manage your Pi remotely.
 
 ## License
 
